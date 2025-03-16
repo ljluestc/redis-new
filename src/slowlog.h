@@ -14,13 +14,14 @@
 
 /* This structure defines an entry inside the slow log list */
 typedef struct slowlogEntry {
-    robj **argv;
-    int argc;
-    long long id;       /* Unique entry identifier. */
-    long long duration; /* Time spent by the query, in microseconds. */
-    time_t time;        /* Unix time at which the query was executed. */
-    sds cname;          /* Client name. */
-    sds peerid;         /* Client network address. */
+    long long id;           /* Unique entry identifier */
+    long long time;         /* UNIX timestamp of the command execution */
+    long long duration;     /* Command execution time in microseconds */
+    robj **argv;            /* Command arguments array */
+    int argc;               /* Number of arguments */
+    sds peerid;             /* Client IP address and port (since Redis 4.0) */
+    sds cname;              /* Client name (since Redis 4.0) */
+    int dbid;               /* Database ID where command was executed */ // New field
 } slowlogEntry;
 
 /* Exported API */
