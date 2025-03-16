@@ -41,15 +41,15 @@ array set ::redis::addr {}
 array set ::redis::blocking {}
 array set ::redis::deferred {}
 array set ::redis::readraw {}
-array set ::redis::attributes {} ;# Holds the RESP3 attributes from the last call
+array set ::redis::attributes {}
 array set ::redis::reconnect {}
 array set ::redis::tls {}
 array set ::redis::callback {}
-array set ::redis::state {} ;# State in non-blocking reply reading
-array set ::redis::statestack {} ;# Stack of states, for nested mbulks
-array set ::redis::curr_argv {} ;# Remember the current argv, to be used in response_transformers.tcl
-array set ::redis::testing_resp3 {} ;# Indicating if the current client is using RESP3 (only if the test is trying to test RESP3 specific behavior. It won't be on in case of force_resp3)
-
+array set ::redis::state {}
+array set ::redis::statestack {}
+array set ::redis::curr_argv {}
+array set ::redis::testing_resp3 {}
+array set ::redis::closecallback {} ;# Change #531: Added closecallback array
 set ::force_resp3 0
 set ::log_req_res 0
 
@@ -76,6 +76,7 @@ proc redis {{server 127.0.0.1} {port 6379} {defer 0} {tls 0} {tlsoptions {}} {re
     set ::redis::curr_argv($id) 0
     set ::redis::testing_resp3($id) 0
     set ::redis::tls($id) $tls
+    set ::redis::closecallback($id) "" ;# Change #531: Initialize closecallback
     ::redis::redis_reset_state $id
     interp alias {} ::redis::redisHandle$id {} ::redis::__dispatch__ $id
 }
@@ -215,7 +216,17 @@ proc ::redis::__method__flush {id fd} {
     flush $fd
 }
 
+# Change #531: Added onclose method to set the closecallback
+proc ::redis::__method__onclose {id fd command} {
+    set ::redis::closecallback($id) $command
+    return $command
+}
+
+# Change #531: Modified close method to execute closecallback if set
 proc ::redis::__method__close {id fd} {
+    if {[string length $::redis::closecallback($id)] > 0} {
+        uplevel #0 $::redis::closecallback($id) [list ::redis::redisHandle$id]
+    }
     catch {close $fd}
     catch {unset ::redis::fd($id)}
     catch {unset ::redis::addr($id)}
@@ -230,6 +241,7 @@ proc ::redis::__method__close {id fd} {
     catch {unset ::redis::callback($id)}
     catch {unset ::redis::curr_argv($id)}
     catch {unset ::redis::testing_resp3($id)}
+    catch {unset ::redis::closecallback($id)} ;# Change #531: Clean up closecallback
     catch {interp alias {} ::redis::redisHandle$id {}}
 }
 
