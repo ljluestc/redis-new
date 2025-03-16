@@ -644,65 +644,64 @@ void sremCommand(client *c) {
     addReplyLongLong(c,deleted);
 }
 
-void smoveCommand(client *c) {
-    robj *srcset, *dstset, *ele;
-    srcset = lookupKeyWrite(c->db,c->argv[1]);
-    dstset = lookupKeyWrite(c->db,c->argv[2]);
+void smoveCommand(redisClient *c) {
+    robj *srcset, *dstset;
+    robj *ele;
+
+    /* Look up source and destination with DENYOOM flag */
+    srcset = lookupKeyWriteWithFlags(c->db, c->argv[1], LOOKUP_DENYOOM);
+    dstset = lookupKeyWriteWithFlags(c->db, c->argv[2], LOOKUP_DENYOOM);
     ele = c->argv[3];
 
-    /* If the source key does not exist return 0 */
+    /* Check if source exists and is a set */
     if (srcset == NULL) {
-        addReply(c,shared.czero);
+        addReply(c, shared.czero);
+        return;
+    }
+    if (srcset->type != REDIS_SET) {
+        addReply(c, shared.wrongtypeerr);
         return;
     }
 
-    /* If the source key has the wrong type, or the destination key
-     * is set and has the wrong type, return with an error. */
-    if (checkType(c,srcset,OBJ_SET) ||
-        checkType(c,dstset,OBJ_SET)) return;
-
-    /* If srcset and dstset are equal, SMOVE is a no-op */
-    if (srcset == dstset) {
-        addReply(c,setTypeIsMember(srcset,ele->ptr) ?
-            shared.cone : shared.czero);
+    /* Check if destination exists and is a set */
+    if (dstset && dstset->type != REDIS_SET) {
+        addReply(c, shared.wrongtypeerr);
         return;
     }
 
-    /* If the element cannot be removed from the src set, return 0. */
-    if (!setTypeRemove(srcset,ele->ptr)) {
-        addReply(c,shared.czero);
-        return;
-    }
-    notifyKeyspaceEvent(NOTIFY_SET,"srem",c->argv[1],c->db->id);
+    /* Remove from source */
+    if (setTypeRemove(srcset, ele)) {
+        /* If destination doesn't exist, create it with memory check */
+        if (!dstset) {
+            if (server.maxmemory && !freeMemoryIfNeeded()) {
+                addReplyError(c, "ERR maxmemory limit reached");
+                setTypeAdd(srcset, ele); /* Undo removal */
+                return;
+            }
+            dstset = setTypeCreate(ele);
+            dbAdd(c->db, c->argv[2], dstset);
+        }
 
-    /* Update keysizes histogram */
-    unsigned long srcLen = setTypeSize(srcset); 
-    updateKeysizesHist(c->db, getKeySlot(c->argv[1]->ptr), OBJ_SET, srcLen + 1, srcLen);
+        /* Check memory before adding to destination */
+        if (server.maxmemory && !freeMemoryIfNeeded()) {
+            addReplyError(c, "ERR maxmemory limit reached");
+            setTypeAdd(srcset, ele); /* Undo removal */
+            return;
+        }
 
-    /* Remove the src set from the database when empty */
-    if (srcLen == 0) {
-        dbDelete(c->db,c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
-    }
+        /* Add to destination */
+        setTypeAdd(dstset, ele);
+        incrRefCount(ele);
 
-    /* Create the destination set when it doesn't exist */
-    if (!dstset) {
-        dstset = setTypeCreate(ele->ptr, 1);
-        dbAdd(c->db,c->argv[2],dstset);
-    }
-
-    signalModifiedKey(c,c->db,c->argv[1]);
-    server.dirty++;
-
-    /* An extra key has changed when ele was successfully added to dstset */
-    if (setTypeAdd(dstset,ele->ptr)) {
-        unsigned long dstLen = setTypeSize(dstset);
-        updateKeysizesHist(c->db, getKeySlot(c->argv[2]->ptr), OBJ_SET, dstLen - 1, dstLen);
         server.dirty++;
-        signalModifiedKey(c,c->db,c->argv[2]);
-        notifyKeyspaceEvent(NOTIFY_SET,"sadd",c->argv[2],c->db->id);
+        /* Remove source set if empty */
+        if (setTypeSize(srcset) == 0) {
+            dbDelete(c->db, c->argv[1]);
+        }
+        addReply(c, shared.cone);
+    } else {
+        addReply(c, shared.czero);
     }
-    addReply(c,shared.cone);
 }
 
 void sismemberCommand(client *c) {
