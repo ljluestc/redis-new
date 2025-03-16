@@ -2821,77 +2821,59 @@ int slaveTryPartialResynchronization(connection *conn, int read_reply) {
     return PSYNC_NOT_SUPPORTED;
 }
 
-/* This handler fires when the non blocking connect was able to
- * establish a connection with the master. */
+/* This handler fires when the non-blocking connect establishes a connection with the master */
 void syncWithMaster(connection *conn) {
     char tmpfile[256], *err = NULL;
     int dfd = -1, maxtries = 5;
     int psync_result;
 
-    /* If this event fired after the user turned the instance into a master
-     * with SLAVEOF NO ONE we must just return ASAP. */
+    /* If this event fired after the user turned the instance into a master with SLAVEOF NO ONE */
     if (server.repl_state == REPL_STATE_NONE) {
         connClose(conn);
         return;
     }
 
-    /* Check for errors in the socket: after a non blocking connect() we
-     * may find that the socket is in error state. */
+    /* Check for socket errors after non-blocking connect */
     if (connGetState(conn) != CONN_STATE_CONNECTED) {
-        serverLog(LL_WARNING,"Error condition on socket for SYNC: %s",
-                connGetLastError(conn));
+        serverLog(LL_WARNING, "Error condition on socket for SYNC: %s",
+                  connGetLastError(conn));
         goto error;
     }
 
-    /* Send a PING to check the master is able to reply without errors. */
+    /* Send PING to check master responsiveness */
     if (server.repl_state == REPL_STATE_CONNECTING) {
-        serverLog(LL_NOTICE,"Non blocking connect for SYNC fired the event.");
-        /* Delete the writable event so that the readable event remains
-         * registered and we can wait for the PONG reply. */
+        serverLog(LL_NOTICE, "Non blocking connect for SYNC fired the event.");
         connSetReadHandler(conn, syncWithMaster);
         connSetWriteHandler(conn, NULL);
         server.repl_state = REPL_STATE_RECEIVE_PING_REPLY;
-        /* Send the PING, don't check for errors at all, we have the timeout
-         * that will take care about this. */
-        err = sendCommand(conn,"PING",NULL);
+        err = sendCommand(conn, "PING", NULL);
         if (err) goto write_error;
         return;
     }
 
-    /* Receive the PONG command. */
+    /* Receive PONG reply */
     if (server.repl_state == REPL_STATE_RECEIVE_PING_REPLY) {
         err = receiveSynchronousResponse(conn);
-
-        /* The master did not reply */
         if (err == NULL) goto no_response_error;
-
-        /* We accept only two replies as valid, a positive +PONG reply
-         * (we just check for "+") or an authentication error.
-         * Note that older versions of Redis replied with "operation not
-         * permitted" instead of using a proper error code, so we test
-         * both. */
-        if (err[0] != '+' &&
-            strncmp(err,"-NOAUTH",7) != 0 &&
-            strncmp(err,"-NOPERM",7) != 0 &&
-            strncmp(err,"-ERR operation not permitted",28) != 0)
-        {
-            serverLog(LL_WARNING,"Error reply to PING from master: '%s'",err);
+        if (err[0] != '+' && 
+            strncmp(err, "-NOAUTH", 7) != 0 && 
+            strncmp(err, "-NOPERM", 7) != 0 && 
+            strncmp(err, "-ERR operation not permitted", 28) != 0) {
+            serverLog(LL_WARNING, "Error reply to PING from master: '%s'", err);
             sdsfree(err);
             goto error;
-        } else {
-            serverLog(LL_NOTICE,
-                "Master replied to PING, replication can continue...");
         }
+        serverLog(LL_NOTICE, "Master replied to PING, replication can continue...");
         sdsfree(err);
         err = NULL;
         server.repl_state = REPL_STATE_SEND_HANDSHAKE;
     }
 
+    /* Send handshake commands */
     if (server.repl_state == REPL_STATE_SEND_HANDSHAKE) {
-        /* AUTH with the master if required. */
         if (server.masterauth) {
-            char *args[3] = {"AUTH",NULL,NULL};
-            size_t lens[3] = {4,0,0};
+            char *args[3] = {"AUTH", NULL, NULL};
+            size_t lens[3] = {4, 0, 0};
             int argc = 1;
             if (server.masteruser) {
                 args[argc] = server.masteruser;
@@ -2905,36 +2887,19 @@ void syncWithMaster(connection *conn) {
             if (err) goto write_error;
         }
 
-        /* Set the slave port, so that Master's INFO command can list the
-         * slave listening port correctly. */
-        {
-            char buf[LONG_STR_SIZE];
+        char buf[LONG_STR_SIZE];
+        slaveGetPortStr(buf, sizeof(buf));
+        err = sendCommand(conn, "REPLCONF", "listening-port", buf, NULL);
+        if (err) goto write_error;
 
-            slaveGetPortStr(buf, sizeof(buf));
-            err = sendCommand(conn,"REPLCONF",
-                    "listening-port",buf, NULL);
-            if (err) goto write_error;
-        }
-
-        /* Set the slave ip, so that Master's INFO command can list the
-         * slave IP address port correctly in case of port forwarding or NAT.
-         * Skip REPLCONF ip-address if there is no slave-announce-ip option set. */
         if (server.slave_announce_ip) {
-            err = sendCommand(conn,"REPLCONF",
-                    "ip-address",server.slave_announce_ip, NULL);
+            err = sendCommand(conn, "REPLCONF", "ip-address", server.slave_announce_ip, NULL);
             if (err) goto write_error;
         }
 
-        /* Inform the master of our (slave) capabilities.
-         *
-         * EOF: supports EOF-style RDB transfer for diskless replication.
-         * PSYNC2: supports PSYNC v2, so understands +CONTINUE <new repl ID>.
-         *
-         * The master will ignore capabilities it does not understand. */
-        err = sendCommand(conn,"REPLCONF",
-                          "capa","eof","capa","psync2",
+        err = sendCommand(conn, "REPLCONF", 
+                          "capa", "eof", "capa", "psync2",
                           server.repl_rdb_channel ? "capa" : NULL, "rdb-channel-repl", NULL);
-
         if (err) goto write_error;
 
         server.repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;
@@ -2944,30 +2909,26 @@ void syncWithMaster(connection *conn) {
     if (server.repl_state == REPL_STATE_RECEIVE_AUTH_REPLY && !server.masterauth)
         server.repl_state = REPL_STATE_RECEIVE_PORT_REPLY;
 
-    /* Receive AUTH reply. */
+    /* Receive AUTH reply */
     if (server.repl_state == REPL_STATE_RECEIVE_AUTH_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
         if (err[0] == '-') {
-            serverLog(LL_WARNING,"Unable to AUTH to MASTER: %s",err);
+            serverLog(LL_WARNING, "Unable to AUTH to MASTER: %s", err);
             sdsfree(err);
             goto error;
         }
         sdsfree(err);
-        err = NULL;
         server.repl_state = REPL_STATE_RECEIVE_PORT_REPLY;
         return;
     }
 
-    /* Receive REPLCONF listening-port reply. */
+    /* Receive REPLCONF listening-port reply */
     if (server.repl_state == REPL_STATE_RECEIVE_PORT_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
-         * REPLCONF listening-port. */
         if (err[0] == '-') {
-            serverLog(LL_NOTICE,"(Non critical) Master does not understand "
-                                "REPLCONF listening-port: %s", err);
+            serverLog(LL_NOTICE, "(Non critical) Master does not understand REPLCONF listening-port: %s", err);
         }
         sdsfree(err);
         server.repl_state = REPL_STATE_RECEIVE_IP_REPLY;
@@ -2977,43 +2938,32 @@ void syncWithMaster(connection *conn) {
     if (server.repl_state == REPL_STATE_RECEIVE_IP_REPLY && !server.slave_announce_ip)
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
 
-    /* Receive REPLCONF ip-address reply. */
+    /* Receive REPLCONF ip-address reply */
     if (server.repl_state == REPL_STATE_RECEIVE_IP_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
-         * REPLCONF ip-address. */
         if (err[0] == '-') {
-            serverLog(LL_NOTICE,"(Non critical) Master does not understand "
-                                "REPLCONF ip-address: %s", err);
+            serverLog(LL_NOTICE, "(Non critical) Master does not understand REPLCONF ip-address: %s", err);
         }
         sdsfree(err);
         server.repl_state = REPL_STATE_RECEIVE_CAPA_REPLY;
         return;
     }
 
-    /* Receive CAPA reply. */
+    /* Receive CAPA reply */
     if (server.repl_state == REPL_STATE_RECEIVE_CAPA_REPLY) {
         err = receiveSynchronousResponse(conn);
         if (err == NULL) goto no_response_error;
-        /* Ignore the error if any, not all the Redis versions support
-         * REPLCONF capa. */
         if (err[0] == '-') {
-            serverLog(LL_NOTICE,"(Non critical) Master does not understand "
-                                  "REPLCONF capa: %s", err);
+            serverLog(LL_NOTICE, "(Non critical) Master does not understand REPLCONF capa: %s", err);
         }
         sdsfree(err);
-        err = NULL;
         server.repl_state = REPL_STATE_SEND_PSYNC;
     }
 
-    /* Try a partial resynchronization. If we don't have a cached master
-     * slaveTryPartialResynchronization() will at least try to use PSYNC
-     * to start a full resynchronization so that we get the master replid
-     * and the global offset, to try a partial resync at the next
-     * reconnection attempt. */
+    /* Send PSYNC */
     if (server.repl_state == REPL_STATE_SEND_PSYNC) {
-        if (slaveTryPartialResynchronization(conn,0) == PSYNC_WRITE_ERROR) {
+        if (slaveTryPartialResynchronization(conn, 0) == PSYNC_WRITE_ERROR) {
             err = sdsnew("Write error sending the PSYNC command.");
             abortFailover("Write error to failover target");
             goto write_error;
@@ -3022,25 +2972,20 @@ void syncWithMaster(connection *conn) {
         return;
     }
 
-    /* If reached this point, we should be in REPL_STATE_RECEIVE_PSYNC_REPLY. */
+    /* Handle PSYNC reply */
     if (server.repl_state != REPL_STATE_RECEIVE_PSYNC_REPLY) {
-        serverLog(LL_WARNING,"syncWithMaster(): state machine error, "
-                             "state should be RECEIVE_PSYNC but is %d",
-                             server.repl_state);
+        serverLog(LL_WARNING, "syncWithMaster(): state machine error, state should be RECEIVE_PSYNC but is %d",
+                  server.repl_state);
         goto error;
     }
 
-    psync_result = slaveTryPartialResynchronization(conn,1);
-    if (psync_result == PSYNC_WAIT_REPLY) return; /* Try again later... */
+    psync_result = slaveTryPartialResynchronization(conn, 1);
+    if (psync_result == PSYNC_WAIT_REPLY) return;
 
-    /* Check the status of the planned failover. We expect PSYNC_CONTINUE,
-     * but there is nothing technically wrong with a full resync which
-     * could happen in edge cases. */
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
-        if (psync_result == PSYNC_CONTINUE ||
-            psync_result == PSYNC_FULLRESYNC ||
-            psync_result == PSYNC_FULLRESYNC_RDBCHANNEL)
-        {
+        if (psync_result == PSYNC_CONTINUE || 
+            psync_result == PSYNC_FULLRESYNC || 
+            psync_result == PSYNC_FULLRESYNC_RDBCHANNEL) {
             clearFailoverState();
         } else {
             abortFailover("Failover target rejected psync request");
@@ -3048,14 +2993,7 @@ void syncWithMaster(connection *conn) {
         }
     }
 
-    /* If the master is in an transient error, we should try to PSYNC
-     * from scratch later, so go to the error path. This happens when
-     * the server is loading the dataset or is not connected with its
-     * master and so forth. */
     if (psync_result == PSYNC_TRY_LATER) goto error;
-
-    /* Note: if PSYNC does not return WAIT_REPLY, it will take care of
-     * uninstalling the read handler from the file descriptor. */
 
     if (psync_result == PSYNC_CONTINUE) {
         serverLog(LL_NOTICE, "MASTER <-> REPLICA sync: Master accepted a Partial Resynchronization.");
@@ -3065,29 +3003,25 @@ void syncWithMaster(connection *conn) {
         return;
     }
 
-    /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
-     * and the server.master_replid and master_initial_offset are
-     * already populated. */
     if (psync_result == PSYNC_NOT_SUPPORTED) {
-        serverLog(LL_NOTICE,"Retrying with SYNC...");
-        if (connSyncWrite(conn,"SYNC\r\n",6,server.repl_syncio_timeout*1000) == -1) {
-            serverLog(LL_WARNING,"I/O error writing to MASTER: %s",
-                connGetLastError(conn));
+        serverLog(LL_NOTICE, "Retrying with SYNC...");
+        if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
+            serverLog(LL_WARNING, "I/O error writing to MASTER: %s",
+                      connGetLastError(conn));
             goto error;
         }
     }
 
-    /* Prepare a suitable temp file for bulk transfer */
+    /* Prepare temp file for full sync */
     if (!useDisklessLoad()) {
-        while(maxtries--) {
-            snprintf(tmpfile,256,
-                "temp-%d.%ld.rdb",(int)server.unixtime,(long int)getpid());
-            dfd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0644);
+        while (maxtries--) {
+            snprintf(tmpfile, 256, "temp-%d.%ld.rdb", (int)server.unixtime, (long int)getpid());
+            dfd = open(tmpfile, O_CREAT | O_WRONLY | O_EXCL, 0644);
             if (dfd != -1) break;
             sleep(1);
         }
         if (dfd == -1) {
-            serverLog(LL_WARNING,"Opening the temp file needed for MASTER <-> REPLICA synchronization: %s",strerror(errno));
+            serverLog(LL_WARNING, "Opening the temp file needed for MASTER <-> REPLICA synchronization: %s", strerror(errno));
             goto error;
         }
         server.repl_transfer_tmpfile = zstrdup(tmpfile);
@@ -3099,10 +3033,7 @@ void syncWithMaster(connection *conn) {
     server.repl_transfer_last_fsync_off = 0;
     server.repl_transfer_lastio = server.unixtime;
 
-    /* Using rdb channel replication, the master responded +RDBCHANNELSYNC.
-     * We need to initialize the RDB channel. */
     if (psync_result == PSYNC_FULLRESYNC_RDBCHANNEL) {
-        /* Create RDB connection */
         server.repl_rdb_transfer_s = connCreate(server.el, connTypeOfReplication());
         if (connConnect(server.repl_rdb_transfer_s, server.masterhost,
                         server.masterport, server.bind_source_addr,
@@ -3115,23 +3046,19 @@ void syncWithMaster(connection *conn) {
         return;
     }
 
-    /* Setup the non blocking download of the bulk file. */
-    if (connSetReadHandler(conn, readSyncBulkPayload)
-            == C_ERR)
-    {
+    if (connSetReadHandler(conn, readSyncBulkPayload) == C_ERR) {
         char conninfo[CONN_INFO_LEN];
-        serverLog(LL_WARNING,
-            "Can't create readable event for SYNC: %s (%s)",
-            strerror(errno), connGetInfo(conn, conninfo, sizeof(conninfo)));
+        serverLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)",
+                  strerror(errno), connGetInfo(conn, conninfo, sizeof(conninfo)));
         goto error;
     }
 
     server.repl_state = REPL_STATE_TRANSFER;
     return;
 
-no_response_error: /* Handle receiveSynchronousResponse() error when master has no reply */
+no_response_error:
     serverLog(LL_WARNING, "Master did not respond to command during SYNC handshake");
-    /* Fall through to regular error handling */
+    /* Fall through to error handling */
 
 error:
     if (dfd != -1) close(dfd);
@@ -3149,10 +3076,148 @@ error:
     server.repl_state = REPL_STATE_CONNECT;
     return;
 
-write_error: /* Handle sendCommand() errors. */
-    serverLog(LL_WARNING,"Sending command to master in replication handshake: %s", err);
+write_error:
+    serverLog(LL_WARNING, "Sending command to master in replication handshake: %s", err);
     sdsfree(err);
     goto error;
+}
+
+/* Try partial resynchronization with master */
+int slaveTryPartialResynchronization(connection *conn, int read_reply) {
+    char *psync_runid;
+    char psync_offset[32];
+    sds reply;
+
+    if (!read_reply) {
+        /* Build and send PSYNC command */
+        psync_runid = server.cached_master ? server.cached_master->replrunid : "?";
+        snprintf(psync_offset, sizeof(psync_offset), "%lld", server.master_initial_offset);
+        if (server.cached_master && server.cached_master->reploff >= 0) {
+            snprintf(psync_offset, sizeof(psync_offset), "%lld", server.cached_master->reploff + 1);
+        }
+
+        serverLog(LL_NOTICE, "Trying a partial resynchronization (request %s:%s).", 
+                  psync_runid, psync_offset);
+        reply = sendCommand(conn, "PSYNC", psync_runid, psync_offset, NULL);
+        if (reply) {
+            serverLog(LL_WARNING, "Unable to send PSYNC to master: %s", reply);
+            sdsfree(reply);
+            return PSYNC_WRITE_ERROR;
+        }
+        return PSYNC_WAIT_REPLY;
+    }
+
+    /* Reading reply */
+    reply = receiveSynchronousResponse(conn);
+    if (reply == NULL) {
+        serverLog(LL_NOTICE, "Master did not respond to PSYNC, will retry later");
+        connSetReadHandler(conn, NULL);
+        return PSYNC_TRY_LATER;
+    }
+
+    if (!strncmp(reply, "+FULLRESYNC", 11)) {
+        char *runid = NULL, *offset = NULL;
+
+        runid = strchr(reply, ' ');
+        if (runid) {
+            runid++;
+            offset = strchr(runid, ' ');
+            if (offset) offset++;
+        }
+        if (!runid || !offset || strlen(runid) != CONFIG_RUN_ID_SIZE) {
+            serverLog(LL_WARNING, "Master replied with wrong FULLRESYNC, retrying later");
+            sdsfree(reply);
+            return PSYNC_TRY_LATER;
+        }
+
+        if (server.cached_master) freeClient(server.cached_master);
+        server.cached_master = createClient(NULL);
+        memcpy(server.cached_master->replrunid, runid, CONFIG_RUN_ID_SIZE);
+        server.cached_master->replrunid[CONFIG_RUN_ID_SIZE] = '\0';
+        server.cached_master->reploff = strtoll(offset, NULL, 10);
+        serverLog(LL_NOTICE, "Full resync from master: %s:%lld", runid, server.cached_master->reploff);
+        sdsfree(reply);
+        connSetReadHandler(conn, NULL);
+        return PSYNC_FULLRESYNC;
+    }
+
+    if (!strncmp(reply, "+CONTINUE", 9)) {
+        char *new_runid = NULL;
+
+        if (strlen(reply) > 10) {
+            new_runid = reply + 10; /* Skip "+CONTINUE " */
+            char *space = strchr(new_runid, ' ');
+            if (space) *space = '\0'; /* Null terminate runid */
+            if (strlen(new_runid) != CONFIG_RUN_ID_SIZE) {
+                serverLog(LL_WARNING, "Invalid runid in CONTINUE reply: %s", new_runid);
+                sdsfree(reply);
+                return PSYNC_TRY_LATER;
+            }
+        }
+
+        serverLog(LL_NOTICE, "Successful partial resynchronization with master.");
+        if (!server.cached_master) {
+            server.cached_master = createClient(NULL);
+            memcpy(server.cached_master->replrunid, server.runid, CONFIG_RUN_ID_SIZE + 1);
+            server.cached_master->reploff = -1;
+        }
+
+        if (new_runid) {
+            memcpy(server.cached_master->replrunid, new_runid, CONFIG_RUN_ID_SIZE + 1);
+        }
+
+        /* Setup replication state */
+        server.master = server.cached_master;
+        server.cached_master = NULL;
+        server.master->flags |= CLIENT_MASTER;
+        server.master->authenticated = 1;
+        server.master->reploff = server.master_initial_offset;
+        server.repl_state = REPL_STATE_CONNECTED;
+        memcpy(server.replid, server.master->replrunid, sizeof(server.replid));
+        replicationResurrectCachedMaster(conn);
+
+        sdsfree(reply);
+        return PSYNC_CONTINUE;
+    }
+
+    if (!strncmp(reply, "-NOMASTERLINK", 13) || !strncmp(reply, "-LOADING", 8)) {
+        serverLog(LL_NOTICE, "Master is loading or not synced, will retry later");
+        sdsfree(reply);
+        connSetReadHandler(conn, NULL);
+        return PSYNC_TRY_LATER;
+    }
+
+    if (!strncmp(reply, "-ERR", 4)) {
+        serverLog(LL_WARNING, "Master returned error on PSYNC: %s", reply);
+        sdsfree(reply);
+        connSetReadHandler(conn, NULL);
+        return PSYNC_NOT_SUPPORTED;
+    }
+
+    serverLog(LL_WARNING, "Unexpected reply to PSYNC from master: %s", reply);
+    sdsfree(reply);
+    connSetReadHandler(conn, NULL);
+    return PSYNC_NOT_SUPPORTED;
+}
+
+/* Validate PSYNC offset against backlog */
+int replicationValidatePsyncOffset(long long psync_offset) {
+    if (!server.repl_backlog) {
+        serverLog(LL_NOTICE, "No replication backlog available for partial resync");
+        return 0;
+    }
+
+    long long backlog_end = server.repl_backlog_off + server.repl_backlog_size;
+    /* Fix: Use >= instead of > to include the upper bound */
+    if (psync_offset < server.repl_backlog_off || psync_offset >= backlog_end) {
+        serverLog(LL_NOTICE,
+                  "Unable to partial resync: offset %lld outside backlog range [%lld, %lld]",
+                  psync_offset, server.repl_backlog_off, backlog_end - 1);
+        return 0;
+    }
+
+    serverLog(LL_NOTICE, "Partial resync possible: offset %lld within backlog", psync_offset);
+    return 1;
 }
 
 int connectWithMaster(void) {
