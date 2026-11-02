@@ -23,6 +23,37 @@ test "Can read from replica after READONLY" {
     assert {[$replica GET a] eq {1}}
 }
 
+test "cluster-replica-default-readonly makes new connections READONLY" {
+    set replica_host [srv -1 host]
+    set replica_port [srv -1 port]
+    $replica config set cluster-replica-default-readonly yes
+
+    set rr [redis $replica_host $replica_port 0 $::tls]
+    assert_equal {1} [$rr GET a]
+    assert_match {*flags=r*} [$rr client info]
+
+    # READWRITE still opts out.
+    $rr READWRITE
+    catch {$rr GET a} err
+    assert {[string range $err 0 4] eq {MOVED}}
+
+    # RESET goes back to the configured default.
+    $rr RESET
+    assert_equal {1} [$rr GET a]
+
+    # Writes are still redirected to the primary.
+    catch {$rr SET a 2} err
+    assert {[string range $err 0 4] eq {MOVED}}
+    $rr close
+
+    # Turning the option off only affects new connections.
+    $replica config set cluster-replica-default-readonly no
+    set rr [redis $replica_host $replica_port 0 $::tls]
+    catch {$rr GET a} err
+    assert {[string range $err 0 4] eq {MOVED}}
+    $rr close
+}
+
 test "Can perform HSET primary and HGET from replica" {
     $primary HSET h a 1
     $primary HSET h b 2

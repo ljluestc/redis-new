@@ -250,7 +250,14 @@ client *createClient(connection *conn) {
     c->mem_usage_bucket_node = NULL;
     c->net_input_bytes_curr_cmd = 0;
     c->net_output_bytes_curr_cmd = 0;
-    if (conn) linkClient(c);
+    if (conn) {
+        linkClient(c);
+        /* In cluster mode, optionally start every connection in READONLY
+         * mode, as if the client sent READONLY itself. The flag only has an
+         * effect when the node is a replica. */
+        if (server.cluster_enabled && server.cluster_replica_default_readonly)
+            c->flags |= CLIENT_READONLY;
+    }
     initClientMultiState(c);
     c->net_input_bytes = 0;
     c->net_output_bytes = 0;
@@ -2190,6 +2197,10 @@ void clearClientConnectionState(client *c) {
     /* Selectively clear state flags not covered above */
     c->flags &= ~(CLIENT_ASKING|CLIENT_READONLY|CLIENT_REPLY_OFF|
                   CLIENT_REPLY_SKIP_NEXT|CLIENT_NO_TOUCH|CLIENT_NO_EVICT);
+
+    /* Go back to the default READONLY state of new connections. */
+    if (server.cluster_enabled && server.cluster_replica_default_readonly)
+        c->flags |= CLIENT_READONLY;
 }
 
 void deauthenticateAndCloseClient(client *c) {
