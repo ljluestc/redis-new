@@ -130,8 +130,16 @@ int sortCompare(const void *s1, const void *s2) {
     int cmp;
 
     if (!server.sort_alpha) {
-        /* Numeric sorting. Here it's trivial as we precomputed scores */
-        if (so1->u.score > so2->u.score) {
+        /* Numeric sorting. Here it's trivial as we precomputed scores.
+         * Elements whose BY pattern did not resolve to a value sort before
+         * all the others, like they already do with ALPHA, instead of being
+         * treated as a score of 0 and landing in the middle of the result
+         * when the weights contain negative numbers. */
+        if (so1->missing != so2->missing) {
+            cmp = so1->missing ? -1 : 1;
+        } else if (so1->missing) {
+            cmp = compareStringObjects(so1->obj,so2->obj);
+        } else if (so1->u.score > so2->u.score) {
             cmp = 1;
         } else if (so1->u.score < so2->u.score) {
             cmp = -1;
@@ -421,6 +429,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 vector[j].obj = listTypeGet(&entry);
                 vector[j].u.score = 0;
                 vector[j].u.cmpobj = NULL;
+                vector[j].missing = 0;
                 j++;
             }
             listTypeResetIterator(&li);
@@ -436,6 +445,7 @@ void sortCommandGeneric(client *c, int readonly) {
             vector[j].obj = listTypeGet(&entry);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
+            vector[j].missing = 0;
             j++;
         }
         listTypeResetIterator(&li);
@@ -449,6 +459,7 @@ void sortCommandGeneric(client *c, int readonly) {
             vector[j].obj = createObject(OBJ_STRING,sdsele);
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
+            vector[j].missing = 0;
             j++;
         }
         setTypeResetIterator(&si);
@@ -477,6 +488,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 vector[j].obj = createStringObject((char *)ele,len);
                 vector[j].u.score = 0;
                 vector[j].u.cmpobj = NULL;
+                vector[j].missing = 0;
                 j++;
             }
         } else {
@@ -500,6 +512,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 vector[j].obj = createStringObject(ele,sdslen(ele));
                 vector[j].u.score = 0;
                 vector[j].u.cmpobj = NULL;
+                vector[j].missing = 0;
                 j++;
                 ln = desc ? ln->backward : ln->level[0].forward;
             }
@@ -519,6 +532,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 vector[j].obj = createStringObject((char *)ele,len);
                 vector[j].u.score = 0;
                 vector[j].u.cmpobj = NULL;
+                vector[j].missing = 0;
                 j++;
             }
         } else {
@@ -531,6 +545,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 vector[j].obj = createStringObject(ele,sdslen(ele));
                 vector[j].u.score = 0;
                 vector[j].u.cmpobj = NULL;
+                vector[j].missing = 0;
                 j++;
             }
             dictResetIterator(&di);
@@ -549,7 +564,10 @@ void sortCommandGeneric(client *c, int readonly) {
             if (sortby) {
                 /* lookup value to sort by */
                 byval = lookupKeyByPattern(c->db,sortby,vector[j].obj);
-                if (!byval) continue;
+                if (!byval) {
+                    vector[j].missing = 1;
+                    continue;
+                }
             } else {
                 /* use object itself to sort by */
                 byval = vector[j].obj;

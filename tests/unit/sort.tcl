@@ -255,6 +255,27 @@ foreach command {SORT SORT_RO} {
         set e
     } {*ERR*double*} {cluster:skip}
 
+    test "SORT BY with missing weights sorts them first, not as zero (#1046)" {
+        r del set1 h1 h2 h3
+        r sadd set1 1 2 3 4 5
+        r hset h1 f1 10
+        r hset h2 f1 -10
+        r hset h3 f1 0
+        assert_equal {4 5 2 3 1} [r sort set1 by h*->f1]
+        assert_equal {1 3 2 5 4} [r sort set1 by h*->f1 desc]
+        assert_equal {4 5 2} [r sort set1 by h*->f1 limit 0 3]
+        assert_equal {4 {} 5 {} 2 -10 3 0 1 10} [r sort set1 by h*->f1 get # get h*->f1]
+        r sort set1 by h*->f1 store sort-res
+        assert_equal {4 5 2 3 1} [r lrange sort-res 0 -1]
+    }
+
+    test "SORT BY with all weights missing keeps lexicographic order" {
+        r del set1
+        r sadd set1 c a b
+        assert_equal {a b c} [r sort set1 by nokey_*]
+        assert_equal {c b a} [r sort set1 by nokey_* desc]
+    }
+
     test "SORT BY sub-sorts lexicographically if score is the same" {
         r del myset
         r sadd myset a b c d e f g h i l m n o p q r s t u v z aa aaa azz

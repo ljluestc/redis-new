@@ -3242,6 +3242,7 @@ typedef struct _redisSortObject {
         double score;
         robj *cmpobj;
     } u;
+    int missing;    /* True if the BY pattern did not resolve to a value. */
 } redisSortObject;
 
 typedef struct _redisSortOperation {
