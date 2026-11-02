@@ -2313,6 +2313,7 @@ struct redisServer {
     unsigned long slowlog_max_len;     /* SLOWLOG max number of items logged */
     unsigned long slowlog_max_string_len; /* SLOWLOG max string length of a command's argument logged */
     int slowlog_max_argc;           /* SLOWLOG max argument count per command logged */
+    int slowlog_log_to_logfile;     /* Also write SLOWLOG entries to the log file */
     long long stat_slowlog_count;          /* Total slowlog entries ever pushed */
     long long stat_slowlog_time_us_sum;    /* Sum of all slowlog entry durations (usec) */
     long long stat_slowlog_time_us_max;    /* Max slowlog entry duration (usec) */

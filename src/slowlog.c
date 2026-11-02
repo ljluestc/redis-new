@@ -102,18 +102,52 @@ void slowlogInit(void) {
  * This function will make sure to trim the slow log accordingly to the
  * configured max length.
  * Returns 1 if an entry was added, 0 otherwise. */
-int slowlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long duration) {
-    if (server.slowlog_log_slower_than < 0 || server.slowlog_max_len == 0) return 0;
-    if (duration >= server.slowlog_log_slower_than) {
-        listAddNodeHead(server.slowlog,
-                        slowlogCreateEntry(c,argv,argc,duration));
+/* Write a slow log entry to the server log file, so that slow commands are
+ * kept after they are evicted from the in-memory slow log. The arguments are
+ * the ones stored in the entry, so they are already trimmed according to
+ * slowlog-entry-max-argc and slowlog-entry-max-string-len. */
+static void slowlogWriteEntryToLogfile(slowlogEntry *se) {
+    if (LL_NOTICE < server.verbosity) return;
 
-        /* Remove old entries if needed. */
-        while (listLength(server.slowlog) > server.slowlog_max_len)
-            listDelNode(server.slowlog,listLast(server.slowlog));
+    sds line = sdscatprintf(sdsempty(),
+        "Slow log entry id=%lld duration=%lld client=%s name=%s cmd=",
+        se->id, se->duration, se->peerid, se->cname);
+    for (int j = 0; j < se->argc; j++) {
+        robj *arg = se->argv[j];
+        if (j) line = sdscatlen(line," ",1);
+        if (arg->encoding == OBJ_ENCODING_INT) {
+            line = sdscatprintf(line,"\"%ld\"",(long)arg->ptr);
+        } else {
+            line = sdscatrepr(line,arg->ptr,sdslen(arg->ptr));
+        }
+    }
+    serverLogRaw(LL_NOTICE,line);
+    sdsfree(line);
+}
+
+/* Push a new entry into the slow log.
+ * This function will make sure to trim the slow log accordingly to the
+ * configured max length. When slowlog-log-to-logfile is enabled the entry is
+ * also written to the server log, even if slowlog-max-len is 0.
+ * Returns 1 if the command was logged, 0 otherwise. */
+int slowlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long duration) {
+    if (server.slowlog_log_slower_than < 0) return 0;
+    if (duration < server.slowlog_log_slower_than) return 0;
+    if (server.slowlog_max_len == 0 && !server.slowlog_log_to_logfile) return 0;
+
+    slowlogEntry *se = slowlogCreateEntry(c,argv,argc,duration);
+    if (server.slowlog_log_to_logfile) slowlogWriteEntryToLogfile(se);
+
+    if (server.slowlog_max_len == 0) {
+        slowlogFreeEntry(se);
         return 1;
     }
-    return 0;
+    listAddNodeHead(server.slowlog,se);
+
+    /* Remove old entries if needed. */
+    while (listLength(server.slowlog) > server.slowlog_max_len)
+        listDelNode(server.slowlog,listLast(server.slowlog));
+    return 1;
 }
 
 /* Remove all the entries from the current slow log. */

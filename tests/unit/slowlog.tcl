@@ -489,4 +489,36 @@ start_server {tags {"slowlog"} overrides {slowlog-log-slower-than 1000000}} {
         set e [lindex [r slowlog get] end-1]
         assert_equal [lindex $e 6] 33
     }
+
+    test {SLOWLOG - slowlog-log-to-logfile writes entries to the log file} {
+        r slowlog reset
+        r config set slowlog-log-slower-than 0
+        r config set slowlog-max-len 128
+        r config set slowlog-entry-max-string-len 128
+        r config set slowlog-entry-max-argc 32
+        r config set slowlog-log-to-logfile yes
+        r client setname slowlog-file-client
+        set lines [count_log_lines 0]
+        r set slowlog-file-key "hello world"
+        verify_log_message 0 "*Slow log entry id=* duration=* client=* name=slowlog-file-client cmd=\"set\" \"slowlog-file-key\" \"hello world\"*" $lines
+        r config set slowlog-log-to-logfile no
+        r client setname ""
+    } {OK} {external:skip}
+
+    test {SLOWLOG - slowlog-log-to-logfile works with zero max length} {
+        r config set slowlog-log-slower-than 0
+        r config set slowlog-max-len 0
+        r config set slowlog-log-to-logfile yes
+        r slowlog reset
+        set lines [count_log_lines 0]
+        r set slowlog-zero-len-key 1
+        verify_log_message 0 "*Slow log entry*cmd=\"set\" \"slowlog-zero-len-key\" \"1\"*" $lines
+        assert_equal 0 [r slowlog len]
+        r config set slowlog-log-to-logfile no
+        set lines [count_log_lines 0]
+        r set slowlog-zero-len-key 2
+        r ping
+        assert_equal 0 [count_message_lines [srv 0 stdout] "slowlog-zero-len-key\" \"2"]
+        r config set slowlog-max-len 128
+    } {OK} {external:skip}
 }

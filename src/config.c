@@ -4226,6 +4226,7 @@ standardConfig static_configs[] = {
     createBoolConfig("cluster-enabled", NULL, IMMUTABLE_CONFIG, server.cluster_enabled, 0, NULL, NULL),
     createBoolConfig("cluster-bus-port-protected-mode", NULL, MODIFIABLE_CONFIG, server.cluster_bus_port_protected_mode, 1, NULL, applyClusterBusPortProtectedMode),
     createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG, server.aof_enabled, 0, NULL, updateAppendonly),
+    createBoolConfig("slowlog-log-to-logfile", NULL, MODIFIABLE_CONFIG, server.slowlog_log_to_logfile, 0, NULL, NULL),
     createBoolConfig("cluster-allow-reads-when-down", NULL, MODIFIABLE_CONFIG, server.cluster_allow_reads_when_down, 0, NULL, NULL),
     createBoolConfig("cluster-allow-pubsubshard-when-down", NULL, MODIFIABLE_CONFIG, server.cluster_allow_pubsubshard_when_down, 1, NULL, NULL),
     createBoolConfig("crash-log-enabled", NULL, MODIFIABLE_CONFIG, server.crashlog_enabled, 1, NULL, updateSighandlerEnabled),
