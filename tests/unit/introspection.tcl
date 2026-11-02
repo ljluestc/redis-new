@@ -409,6 +409,49 @@ start_server {tags {"introspection"}} {
         set _ $res
     } {*"set" "foo"*"get" "foo"*}
 
+    test {MONITOR WRITE only logs write commands} {
+        set rd [redis_deferring_client]
+        $rd monitor write
+        assert_match {*OK*} [$rd read]
+        r get foo
+        r set foo bar
+        r exists foo
+        r del foo
+        set res [list [$rd read] [$rd read]]
+        $rd close
+        set _ $res
+    } {*"set" "foo" "bar"*"del" "foo"*}
+
+    test {MONITOR READ only logs read-only commands} {
+        set rd [redis_deferring_client]
+        $rd monitor read
+        assert_match {*OK*} [$rd read]
+        r set foo bar
+        r get foo
+        r del foo
+        r exists foo
+        set res [list [$rd read] [$rd read]]
+        $rd close
+        set _ $res
+    } {*"get" "foo"*"exists" "foo"*}
+
+    test {MONITOR WRITE logs write commands issued by scripts} {
+        set rd [redis_deferring_client]
+        $rd monitor write
+        $rd read ;# Discard the OK
+        r eval {redis.call('get',KEYS[1]); redis.call('set',KEYS[1],ARGV[1])} 1 foo bar
+        r ping
+        r set foo baz
+        assert_match {*lua*"set"*"foo"*"bar"*} [$rd read]
+        assert_match {*"set"*"foo"*"baz"*} [$rd read]
+        $rd close
+    }
+
+    test {MONITOR rejects unknown filters} {
+        assert_error {*syntax error*} {r monitor foo}
+        assert_error {*syntax error*} {r monitor read write}
+    }
+
     test {MONITOR can log commands issued by the scripting engine} {
         set rd [redis_deferring_client]
         $rd monitor

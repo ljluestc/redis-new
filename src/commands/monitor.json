@@ -3,14 +3,38 @@
         "summary": "Listens for all requests received by the server in real-time.",
         "group": "server",
         "since": "1.0.0",
-        "arity": 1,
+        "arity": -1,
         "function": "monitorCommand",
-        "history": [],
+        "history": [
+            [
+                "8.8.0",
+                "Added the `READ` and `WRITE` filters."
+            ]
+        ],
         "command_flags": [
             "ADMIN",
             "NOSCRIPT",
             "LOADING",
             "STALE"
+        ],
+        "arguments": [
+            {
+                "name": "filter",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "read",
+                        "type": "pure-token",
+                        "token": "READ"
+                    },
+                    {
+                        "name": "write",
+                        "type": "pure-token",
+                        "token": "WRITE"
+                    }
+                ]
+            }
         ]
     }
 }

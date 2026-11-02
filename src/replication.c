@@ -807,15 +807,39 @@ void replicationFeedStreamFromMasterStream(char *buf, size_t buflen) {
     }
 }
 
+/* Return true if a command with the given flags passes the MONITOR filter. */
+static int monitorFilterMatches(int filter, uint64_t cmd_flags) {
+    switch (filter) {
+    case MONITOR_FILTER_READ: return (cmd_flags & CMD_READONLY) != 0;
+    case MONITOR_FILTER_WRITE: return (cmd_flags & CMD_WRITE) != 0;
+    default: return 1;
+    }
+}
+
 void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv, int argc) {
     /* Fast path to return if the monitors list is empty or the server is in loading. */
     if (monitors == NULL || listLength(monitors) == 0 || server.loading) return;
     listNode *ln;
     listIter li;
     int j;
-    sds cmdrepr = sdsnew("+");
+    sds cmdrepr;
     robj *cmdobj;
     struct timeval tv;
+    uint64_t cmd_flags = c->cmd ? c->cmd->flags : 0;
+
+    /* Skip formatting the command if no monitor is interested in it. */
+    int interested = 0;
+    listRewind(monitors,&li);
+    while((ln = listNext(&li))) {
+        client *monitor = ln->value;
+        if (monitorFilterMatches(monitor->monitor_filter, cmd_flags)) {
+            interested = 1;
+            break;
+        }
+    }
+    if (!interested) return;
+
+    cmdrepr = sdsnew("+");
 
     gettimeofday(&tv,NULL);
     cmdrepr = sdscatprintf(cmdrepr,"%ld.%06ld ",(long)tv.tv_sec,(long)tv.tv_usec);
@@ -847,6 +871,7 @@ void replicationFeedMonitors(client *c, list *monitors, int dictid, robj **argv,
         if (c->realcmd && (c->realcmd->flags & CMD_INTERNAL) && !(monitor->flags & CLIENT_INTERNAL)) {
             continue;
         }
+        if (!monitorFilterMatches(monitor->monitor_filter, cmd_flags)) continue;
         addReply(monitor,cmdobj);
         updateClientMemUsageAndBucket(monitor);
     }

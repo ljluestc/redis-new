@@ -186,6 +186,7 @@ client *createClient(connection *conn) {
     c->bulklen = -1;
     c->sentlen = 0;
     c->flags = 0;
+    c->monitor_filter = MONITOR_FILTER_ALL;
     c->io_flags = CLIENT_IO_READ_ENABLED | CLIENT_IO_WRITE_ENABLED;
     c->read_error = 0;
     c->slot = -1;

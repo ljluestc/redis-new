@@ -7497,9 +7497,25 @@ void monitorCommand(client *c) {
         return;
     }
 
+    int filter = MONITOR_FILTER_ALL;
+    if (c->argc == 2) {
+        if (!strcasecmp(c->argv[1]->ptr,"read")) {
+            filter = MONITOR_FILTER_READ;
+        } else if (!strcasecmp(c->argv[1]->ptr,"write")) {
+            filter = MONITOR_FILTER_WRITE;
+        } else {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return;
+        }
+    } else if (c->argc > 2) {
+        addReplyErrorObject(c,shared.syntaxerr);
+        return;
+    }
+
     /* ignore MONITOR if already slave or in monitor mode */
     if (c->flags & CLIENT_SLAVE) return;
 
+    c->monitor_filter = filter;
     c->flags |= (CLIENT_SLAVE|CLIENT_MONITOR);
     listAddNodeTail(server.monitors,c);
     addReply(c,shared.ok);

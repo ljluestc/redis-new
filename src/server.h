@@ -1577,6 +1577,11 @@ typedef struct {
 } clientReqResInfo;
 #endif
 
+/* Filters for clients in MONITOR mode, see MONITOR [READ|WRITE]. */
+#define MONITOR_FILTER_ALL 0    /* Show every command (default). */
+#define MONITOR_FILTER_READ 1   /* Show only read-only commands. */
+#define MONITOR_FILTER_WRITE 2  /* Show only write commands. */
+
 typedef struct client {
     uint64_t id;            /* Client incremental unique ID. */
     uint64_t flags;         /* Client flags: CLIENT_* macros. */
@@ -1586,6 +1591,7 @@ typedef struct client {
     uint8_t io_flags;       /* Accessed by both main and IO threads, but not modified concurrently */
     uint8_t read_error;     /* Client read error: CLIENT_READ_* macros. */
     int resp;               /* RESP protocol version. Can be 2 or 3. */
+    int monitor_filter;     /* MONITOR_FILTER_* when the client is in MONITOR mode. */
     redisDb *db;            /* Pointer to currently SELECTed DB. */
     robj *name;             /* As set by CLIENT SETNAME. */
     robj *lib_name;         /* The client library name as set by CLIENT SETINFO. */
